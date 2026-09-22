@@ -1,0 +1,46 @@
+name: Deploy to server
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install sshpass
+        run: sudo apt-get update -qq && sudo apt-get install -y sshpass
+
+      - name: Deploy over SSH
+        env:
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$SERVER_USER@$SERVER_HOST" bash -s << 'REMOTE_SCRIPT'
+            set -e
+            APP_DIR=/opt/pdn_mask
+            REPO_URL=https://github.com/walktt/pdn_mask.git
+
+            if ! command -v git >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+              apt-get update -qq
+              apt-get install -y git python3 python3-venv python3-pip
+            fi
+
+            if [ -d "$APP_DIR/.git" ]; then
+              cd "$APP_DIR"
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              rm -rf "$APP_DIR"
+              git clone "$REPO_URL" "$APP_DIR"
+              cd "$APP_DIR"
+            fi
+
+            python3 -m venv venv
+            ./venv/bin/pip install --upgrade pip
+            ./venv/bin/pip install -r requirements.txt
+
+            echo "Deployed commit: $(git rev-parse --short HEAD)"
+          REMOTE_SCRIPT
