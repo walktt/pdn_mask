@@ -1,6 +1,13 @@
 transformers
 torch
 pytest
+pytest-asyncio
+psycopg[binary]
+psycopg_pool
+cryptography
+fastapi
+uvicorn[standard]
+httpx
 fastapi
 uvicorn[standard]
 redis

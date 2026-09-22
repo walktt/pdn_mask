@@ -33,6 +33,11 @@ def load_ner_model():
     return _ner_pipeline
 
 
+def is_loaded() -> bool:
+    """Загружена ли модель (для /health)."""
+    return _ner_pipeline is not None
+
+
 # ------------------------------------------------------------ разбиение на куски
 
 def split_sentences(text: str) -> list:
