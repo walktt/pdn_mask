@@ -1,3 +1,6 @@
 transformers
 torch
 pytest
+fastapi
+uvicorn[standard]
+redis
