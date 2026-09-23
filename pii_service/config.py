@@ -6,6 +6,8 @@
 (и, при необходимости, функцию-валидатор в patterns.py).
 """
 
+import os
+
 # сколько слов слева и справа от находки учитывается как "контекст"
 CONTEXT_WINDOW = 7
 
@@ -39,7 +41,8 @@ DB_POOL_MAX_SIZE = 20
 PIPELINE_EXECUTOR_WORKERS = 12
 
 # подключение к БД и ключ шифрования (storage.py) — раньше брались из переменных окружения
-DATABASE_URL = "postgresql://astro:astro@localhost:5433/astro"
+# в проде переопределяется через переменную окружения DATABASE_URL (docker-compose.yml)
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://astro:astro@localhost:5433/astro")
 PII_ENCRYPTION_KEY = "RcS8tVtsHahCFUpUaQaMetrYS3mTbye3WLDKAMCaXYY="
 
 # сколько дней хранится запись в pii_requests (storage.py)

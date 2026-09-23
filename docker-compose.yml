@@ -1,24 +1,27 @@
 services:
-  redis:
-    image: redis:7-alpine
+  postgres:
+    image: postgres:16-alpine
     restart: unless-stopped
+    environment:
+      - POSTGRES_USER=astro
+      - POSTGRES_PASSWORD=astro
+      - POSTGRES_DB=astro
     volumes:
-      - redis_data:/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "pg_isready -U astro -d astro"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
 
   app:
     build: .
     restart: unless-stopped
     depends_on:
-      redis:
+      postgres:
         condition: service_healthy
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - STATE_TTL_SECONDS=3600
+      - DATABASE_URL=postgresql://astro:astro@postgres:5432/astro
     ports:
       - "80:8000"
     healthcheck:
@@ -26,6 +29,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
 
 volumes:
-  redis_data:
+  postgres_data:

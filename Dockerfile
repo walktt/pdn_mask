@@ -4,15 +4,17 @@ WORKDIR /app
 
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     build-essential \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY pii_service ./pii_service
+COPY sql ./sql
 
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-CMD ["uvicorn", "pii_service.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["python", "pii_service/run.py"]
