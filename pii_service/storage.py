@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from cryptography.fernet import Fernet, InvalidToken
 from psycopg_pool import AsyncConnectionPool
 
-from config import RETENTION_DAYS
+from config import DATABASE_URL, DB_POOL_MAX_SIZE, DB_POOL_MIN_SIZE, PII_ENCRYPTION_KEY, RETENTION_DAYS
 
 _INIT_SQL_PATH = os.path.join(os.path.dirname(__file__), "..", "sql", "init.sql")
 
@@ -20,17 +20,15 @@ _pool = None
 _fernet = None
 
 
-def _database_url() -> str:
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        raise RuntimeError("Не задана переменная окружения DATABASE_URL")
-    return url
-
-
 async def _get_pool() -> AsyncConnectionPool:
     global _pool
     if _pool is None:
-        pool = AsyncConnectionPool(_database_url(), open=False)
+        pool = AsyncConnectionPool(
+            DATABASE_URL,
+            min_size=DB_POOL_MIN_SIZE,
+            max_size=DB_POOL_MAX_SIZE,
+            open=False,
+        )
         await pool.open()
         _pool = pool
     return _pool
@@ -39,15 +37,13 @@ async def _get_pool() -> AsyncConnectionPool:
 def _get_fernet() -> Fernet:
     global _fernet
     if _fernet is None:
-        key = os.environ.get("PII_ENCRYPTION_KEY")
-        if not key:
-            raise RuntimeError("Не задана переменная окружения PII_ENCRYPTION_KEY")
+        key = PII_ENCRYPTION_KEY
         _fernet = Fernet(key.encode("ascii") if isinstance(key, str) else key)
     return _fernet
 
 
 async def init_db() -> None:
-    """Создаёт таблицу pii_requests, если её ещё нет (sql/init.sql)."""
+    """Создаёт схему pii_masker и таблицу pii_requests в ней, если их ещё нет (sql/init.sql)."""
     with open(_INIT_SQL_PATH, "r", encoding="utf-8") as f:
         sql = f.read()
 
@@ -57,8 +53,8 @@ async def init_db() -> None:
         await conn.commit()
 
 
-async def save_request(request_id: str, init_text: str, masked_text: str) -> None:
-    """Сохраняет пару (исходный/маскированный текст). Если request_id уже есть — перезаписывает."""
+async def save_request(request_id: str, init_text: str, masked_text: str, duration_ms: int = 0) -> None:
+    """Сохраняет пару (исходный/маскированный текст) и время обработки. Если request_id уже есть — перезаписывает."""
     encrypted_init_text = _get_fernet().encrypt(init_text.encode("utf-8"))
 
     pool = await _get_pool()
@@ -66,14 +62,15 @@ async def save_request(request_id: str, init_text: str, masked_text: str) -> Non
         async with pool.connection() as conn:
             await conn.execute(
                 """
-                INSERT INTO pii_requests (request_id, init_text, masked_text, created_at)
-                VALUES (%s, %s, %s, now())
+                INSERT INTO pii_masker.pii_requests (request_id, init_text, masked_text, duration_ms, created_at)
+                VALUES (%s, %s, %s, %s, now())
                 ON CONFLICT (request_id) DO UPDATE
                 SET init_text = EXCLUDED.init_text,
                     masked_text = EXCLUDED.masked_text,
+                    duration_ms = EXCLUDED.duration_ms,
                     created_at = EXCLUDED.created_at
                 """,
-                (request_id, encrypted_init_text, masked_text),
+                (request_id, encrypted_init_text, masked_text, duration_ms),
             )
             await conn.commit()
     except Exception as exc:
@@ -86,7 +83,7 @@ async def load_request(request_id: str) -> str | None:
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "SELECT init_text, created_at FROM pii_requests WHERE request_id = %s",
+                "SELECT init_text, created_at FROM pii_masker.pii_requests WHERE request_id = %s",
                 (request_id,),
             )
             row = await cur.fetchone()
@@ -113,7 +110,7 @@ async def delete_expired() -> int:
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "DELETE FROM pii_requests WHERE created_at < now() - %s * interval '1 day'",
+                "DELETE FROM pii_masker.pii_requests WHERE created_at < now() - %s * interval '1 day'",
                 (RETENTION_DAYS,),
             )
             deleted = cur.rowcount

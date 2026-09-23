@@ -23,7 +23,7 @@ _MONTHS_RU = {
     "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
 }
 
-_NUMERIC_DATE_RE = re.compile(r"\b(\d{1,2})[./](\d{1,2})[./](\d{2,4})\b")
+_NUMERIC_DATE_RE = re.compile(r"\b(\d{1,4})[./](\d{1,4})[./](\d{1,4})\b")
 _TEXT_DATE_RE = re.compile(
     r"\b(\d{1,2})\s+(" + "|".join(_MONTHS_RU.keys()) + r")\s+(\d{4})\b",
     re.IGNORECASE,
@@ -78,6 +78,46 @@ def date_check(day: int, month: int, year: int) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _interpret_numeric_date(g1: str, g2: str, g3: str):
+    """Раскладывает три числа даты (разделённые . или /) на (день, месяц, год).
+
+    Поддерживает разный порядок: дд.мм.гггг, мм.дд.гггг (США), гггг.дд.мм, гггг.мм.дд.
+    Год определяется по группе из 4 цифр (если она первая — год впереди, иначе год последний,
+    с нормализацией двузначного года). Если день/месяц можно разложить только одним способом
+    (например, одно из чисел > 12) — используется он; если оба разложения возможны —
+    берётся вариант по умолчанию для соответствующей стороны (см. комментарии ниже).
+    Возвращает None, если ни один вариант не даёт месяц в диапазоне 1..12.
+    """
+    n1, n2, n3 = int(g1), int(g2), int(g3)
+
+    if len(g1) == 4:
+        year = n1
+        candidates = []
+        if 1 <= n3 <= 12:
+            candidates.append((n2, n3))  # гггг.дд.мм (пример из ТЗ) — по умолчанию при неоднозначности
+        if 1 <= n2 <= 12:
+            candidates.append((n3, n2))  # гггг.мм.дд
+        if not candidates:
+            return None
+        day, month = candidates[0]
+        return day, month, year
+
+    year = n3
+    if len(g3) <= 2:
+        current = date.today().year % 100
+        year += 2000 if year <= current else 1900
+
+    candidates = []
+    if 1 <= n2 <= 12:
+        candidates.append((n1, n2))  # дд.мм.гггг — по умолчанию при неоднозначности
+    if 1 <= n1 <= 12:
+        candidates.append((n2, n1))  # мм.дд.гггг (США)
+    if not candidates:
+        return None
+    day, month = candidates[0]
+    return day, month, year
 
 
 _VALIDATORS = {"luhn_check": luhn_check, "inn_check": inn_check}
@@ -161,7 +201,9 @@ def find_simple(text: str, pii_type: dict) -> list:
             continue
 
         context = get_context(text, start, end)
-        matched_keyword = has_keyword(context, pii_type["keywords"])
+        # ключевое слово может быть не только рядом, но и внутри самого значения
+        # (например, "серия 4512 номер 345678" — "серия"/"номер" уже часть найденного спана)
+        matched_keyword = has_keyword(context, pii_type["keywords"]) or has_keyword(value.lower(), pii_type["keywords"])
         if pii_type["needs_context"] and not matched_keyword:
             continue
 
@@ -190,10 +232,10 @@ def find_dates(text: str) -> list:
 
     candidates = []
     for match in _NUMERIC_DATE_RE.finditer(text):
-        day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
-        if year < 100:
-            current = date.today().year % 100
-            year += 2000 if year <= current else 1900
+        parsed = _interpret_numeric_date(match.group(1), match.group(2), match.group(3))
+        if parsed is None:
+            continue
+        day, month, year = parsed
         candidates.append((match.start(), match.end(), day, month, year))
 
     for match in _TEXT_DATE_RE.finditer(text):

@@ -3,11 +3,13 @@ FastAPI-сервис: единый эндпоинт POST /process маскиру
 при первом обращении с новым payload_id и демаскирует — при повторном.
 """
 
+import asyncio
 import json
 import logging
 import time
 import uuid
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -19,9 +21,14 @@ import masking
 import ner
 import patterns
 import storage
+from config import PIPELINE_EXECUTOR_WORKERS
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("pii_service")
+
+# дефолтный executor asyncio (min(32, cpu_count+4)) слишком мал под нагрузку в сотни
+# одновременных запросов — заводим свой, большего размера, специально под run_pipeline
+_pipeline_executor = ThreadPoolExecutor(max_workers=PIPELINE_EXECUTOR_WORKERS)
 
 
 class ProcessRequest(BaseModel):
@@ -34,7 +41,12 @@ class ProcessResponse(BaseModel):
 
 
 def run_pipeline(text: str) -> tuple:
-    """Полный пайплайн поиска и маскирования ПДн. Возвращает (masked_text, mapping, findings)."""
+    """Полный пайплайн поиска и маскирования ПДн. Возвращает (masked_text, mapping, findings).
+
+    Синхронная (блокирующая) функция — regex и инференс NER-модели грузят CPU.
+    Вызывающий код обязан гнать её через run_in_executor, а не напрямую из async-хендлера,
+    иначе она заблокирует event loop и запросы будут обрабатываться строго по одному.
+    """
     regex_findings = patterns.find_regex(text)
     ner_findings = ner.find_ner(text)
     organizations = ner.find_organizations(text)
@@ -65,23 +77,35 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Модуль безопасности ПДн", lifespan=lifespan)
 
 
-@app.post("/process", response_model=ProcessResponse)
-async def process(body: ProcessRequest) -> ProcessResponse:
+@app.middleware("http")
+async def log_timing_middleware(request: Request, call_next):
+    """Логирует время обработки и найденные типы ПДн для КАЖДОГО запроса (успешного, 4xx, 5xx)."""
     start = time.monotonic()
+    request.state.start_time = start
+    request.state.found_types = {}
 
+    response = await call_next(request)
+
+    # целые миллисекунды от начала запроса (до роутинга/валидации) до момента,
+    # когда обработчик полностью завершил все расчёты и вернул готовый ответ
+    duration_ms = round((time.monotonic() - start) * 1000)
+    _log_request(request.url.path, request.state.found_types, duration_ms)
+    return response
+
+
+@app.post("/process", response_model=ProcessResponse)
+async def process(body: ProcessRequest, request: Request) -> ProcessResponse:
     existing = await storage.load_request(body.payload_id)
     if existing is not None:
-        duration_ms = int((time.monotonic() - start) * 1000)
-        _log_request("/process", {}, duration_ms)
         return ProcessResponse(result=existing)
 
-    masked_text, _mapping, findings = run_pipeline(body.payload)
-    await storage.save_request(body.payload_id, body.payload, masked_text)
+    loop = asyncio.get_running_loop()
+    masked_text, _mapping, findings = await loop.run_in_executor(_pipeline_executor, run_pipeline, body.payload)
 
-    found_types = dict(Counter(finding["type"] for finding in findings))
-    duration_ms = int((time.monotonic() - start) * 1000)
-    _log_request("/process", found_types, duration_ms)
+    duration_ms = round((time.monotonic() - request.state.start_time) * 1000)
+    await storage.save_request(body.payload_id, body.payload, masked_text, duration_ms)
 
+    request.state.found_types = dict(Counter(finding["type"] for finding in findings))
     return ProcessResponse(result=masked_text)
 
 

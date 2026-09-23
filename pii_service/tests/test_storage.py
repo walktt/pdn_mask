@@ -35,7 +35,7 @@ async def _fresh_storage(monkeypatch):
     await storage.init_db()
     pool = await storage._get_pool()
     async with pool.connection() as conn:
-        await conn.execute("DELETE FROM pii_requests")
+        await conn.execute("DELETE FROM pii_masker.pii_requests")
         await conn.commit()
 
     yield
@@ -69,7 +69,7 @@ async def test_expired_request_returns_none():
     pool = await storage._get_pool()
     async with pool.connection() as conn:
         await conn.execute(
-            "UPDATE pii_requests SET created_at = now() - %s * interval '1 day' WHERE request_id = %s",
+            "UPDATE pii_masker.pii_requests SET created_at = now() - %s * interval '1 day' WHERE request_id = %s",
             (config.RETENTION_DAYS + 1, "req-3"),
         )
         await conn.commit()
@@ -85,7 +85,7 @@ async def test_delete_expired_counts_and_removes():
     pool = await storage._get_pool()
     async with pool.connection() as conn:
         await conn.execute(
-            "UPDATE pii_requests SET created_at = now() - %s * interval '1 day' WHERE request_id = %s",
+            "UPDATE pii_masker.pii_requests SET created_at = now() - %s * interval '1 day' WHERE request_id = %s",
             (config.RETENTION_DAYS + 1, "req-4"),
         )
         await conn.commit()

@@ -21,7 +21,7 @@ def client(monkeypatch):
     async def fake_close_pool():
         return None
 
-    async def fake_save_request(request_id, init_text, masked_text):
+    async def fake_save_request(request_id, init_text, masked_text, duration_ms=0):
         fake_db[request_id] = init_text
 
     async def fake_load_request(request_id):

@@ -9,7 +9,7 @@ import re
 
 from transformers import pipeline
 
-from config import COUNTRIES, NER_MAX_TOKENS, NER_MIN_SCORE, NER_MODEL_NAME, get_pii_type
+from config import COUNTRIES, NER_DEVICE, NER_MAX_TOKENS, NER_MIN_SCORE, NER_MODEL_NAME, get_pii_type
 
 # части, из которых собирается ADDRESS в build_addresses
 _ADDRESS_PART_TYPES = {"COUNTRY", "POSTCODE", "CITY", "STREET", "HOUSE", "FLAT"}
@@ -21,6 +21,14 @@ _ner_pipeline = None
 
 # --------------------------------------------------------------- загрузка модели
 
+def _resolve_device():
+    """CPU (-1) по умолчанию; "dml" — GPU через DirectML (нужен установленный torch-directml)."""
+    if NER_DEVICE == "dml":
+        import torch_directml
+        return torch_directml.device()
+    return -1
+
+
 def load_ner_model():
     """Загружает NER-модель один раз и кэширует её в модуле; повторные вызовы отдают кэш."""
     global _ner_pipeline
@@ -29,6 +37,7 @@ def load_ner_model():
             "ner",
             model=NER_MODEL_NAME,
             aggregation_strategy="simple",
+            device=_resolve_device(),
         )
     return _ner_pipeline
 
@@ -94,6 +103,13 @@ def _word_stem(word: str) -> str:
     return word
 
 
+def _stems_match(value_stem: str, country_stem: str) -> bool:
+    """Короткие основы (<=4 символов) слишком общие для startswith — иначе "Казани" ~ "казаХстан"."""
+    if len(value_stem) <= 4 or len(country_stem) <= 4:
+        return value_stem == country_stem
+    return value_stem.startswith(country_stem) or country_stem.startswith(value_stem)
+
+
 def is_country(value: str) -> bool:
     """Похоже ли значение LOC-сущности на название страны из COUNTRIES (с учётом падежа)."""
     value_stems = [_word_stem(word) for word in value.split()]
@@ -103,7 +119,7 @@ def is_country(value: str) -> bool:
         country_stems = [_word_stem(word) for word in country.split()]
         if len(country_stems) != len(value_stems):
             continue
-        if all(v.startswith(c) or c.startswith(v) for v, c in zip(value_stems, country_stems)):
+        if all(_stems_match(v, c) for v, c in zip(value_stems, country_stems)):
             return True
     return False
 

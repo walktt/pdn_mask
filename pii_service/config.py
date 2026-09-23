@@ -24,6 +24,27 @@ NER_MIN_SCORE = 0.5
 # примерный лимит слов на кусок текста при разбиении для NER
 NER_MAX_TOKENS = 400
 
+# устройство для инференса NER-модели: "cpu" (по умолчанию) или "dml" (GPU через DirectML,
+# для запуска нужен run_gpu.py и requirements-gpu.txt — см. README по GPU-запуску)
+NER_DEVICE = "cpu"
+
+# размер пула соединений к Postgres (storage.py) — под нагрузку с большим RPS
+DB_POOL_MIN_SIZE = 4
+DB_POOL_MAX_SIZE = 20
+
+# сколько запросов может одновременно считать пайплайн (regex+NER) в threadpool (api.py).
+# Проверено нагрузочным тестом на 100 потоках: 64 воркера дали РЕЗУЛЬТАТ ХУЖЕ (8.99 RPS),
+# чем дефолт asyncio min(32, cpu_count+4) (11.59 RPS) — узкое место GIL, не размер пула,
+# больше потоков просто добавляет накладные расходы на переключение контекста.
+PIPELINE_EXECUTOR_WORKERS = 12
+
+# подключение к БД и ключ шифрования (storage.py) — раньше брались из переменных окружения
+DATABASE_URL = "postgresql://astro:astro@localhost:5433/astro"
+PII_ENCRYPTION_KEY = "RcS8tVtsHahCFUpUaQaMetrYS3mTbye3WLDKAMCaXYY="
+
+# сколько дней хранится запись в pii_requests (storage.py)
+RETENTION_DAYS = 30
+
 # страны для типа CITIZENSHIP (в т.ч. варианты написания РФ)
 COUNTRIES = [
     "Российская Федерация", "Россия", "РФ",
@@ -62,9 +83,10 @@ ADDRESS_NAME_MARKERS = [
 # маркеры организации рядом с ADDRESS/CITY/STREET (context.apply_context, п. г)
 ORG_MARKERS = ["отделение", "филиал", "офис", "банкомат", "банк", "тц", "магазин", "музей"]
 
-# общая регулярка даты: dd.mm.yyyy / dd/mm/yyyy / "12 марта 1990"
+# общая регулярка даты: любой порядок дд/мм/гггг (дд.мм.гггг, мм.дд.гггг, гггг.дд.мм, ...)
+# или "12 марта 1990"; конкретную раскладку определяет patterns._interpret_numeric_date
 _DATE_PATTERN = (
-    r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b"
+    r"\b\d{1,4}[./]\d{1,4}[./]\d{1,4}\b"
     r"|"
     r"\b\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|"
     r"августа|сентября|октября|ноября|декабря)\s+\d{4}\b"
@@ -101,7 +123,11 @@ PII_TYPES = [
     {
         "type": "PASSPORT",
         "label": "Паспорт",
-        "pattern": r"\b\d{2}\s?\d{2}\s?\d{6}\b",
+        "pattern": (
+            r"\b\d{2}\s?\d{2}\s?\d{6}\b"  # "45 12 345678" / "4512 345678" / "4512345678"
+            r"|"
+            r"серия\s*№?\s*:?\s*\d{2}\s?\d{2}\s*,?\s*(?:и\s*)?номер\s*№?\s*:?\s*\d{6}"  # "серия XXXX номер XXXXXX"
+        ),
         "keywords": ["паспорт", "серия", "номер паспорта"],
         "validator": None,
         "base_score": 0.5,
