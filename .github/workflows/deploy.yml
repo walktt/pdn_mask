@@ -5,6 +5,13 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+# два деплоя параллельно по SSH на один и тот же сервер сталкивались лбами
+# (docker compose пытался создать контейнер с одним именем дважды разом) —
+# ставим все прогоны в очередь, второй ждёт, пока первый закончит.
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -41,6 +48,9 @@ jobs:
               cd "$APP_DIR"
             fi
 
+            # чистим осиротевшие/конфликтующие контейнеры от предыдущих версий
+            # compose-файла (например redis из старого стека) перед каждым поднятием
+            docker compose down --remove-orphans || true
             docker compose up -d --build
 
             echo "Deployed commit: $(git rev-parse --short HEAD)"
